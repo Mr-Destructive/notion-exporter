@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/jomei/notionapi"
 )
@@ -72,7 +75,6 @@ func exportHandler(w http.ResponseWriter, r *http.Request) {
 	apiKey := r.FormValue("api_key")
 	contentType := r.FormValue("content_type")
 	notionID := r.FormValue("notion_id")
-	fmt.Println(apiKey, contentType, notionID)
 
 	client := notionapi.NewClient(notionapi.Token(apiKey))
 	if contentType == "database" {
@@ -81,13 +83,37 @@ func exportHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Error exporting database", http.StatusInternalServerError)
 			return
 		}
-		fmt.Println(db.Object.String())
+		// return a markdown file with the contents of db
+		fmt.Println(db)
+
 	} else if contentType == "page" {
 		page, err := client.Page.Get(context.Background(), notionapi.PageID(notionID))
 		if err != nil {
-			http.Error(w, "Error exporting page", http.StatusInternalServerError)
+
+		}
+		page_url := strings.Split(page.URL, "/")
+		idpart := strings.LastIndex(page_url[len(page_url)-1], "-")
+		title := page_url[len(page_url)-1][:idpart]
+
+		pagination := notionapi.Pagination{
+			PageSize: 10,
+		}
+		children, err := client.Block.GetChildren(context.Background(), notionapi.BlockID(notionID), &pagination)
+		text := []string{}
+		for _, child := range children.Results {
+			text = append(text, child.GetRichText())
+		}
+		buf := new(strings.Builder)
+		_, err = buf.WriteString(strings.Join(text, "\n"))
+		w.Header().Set("Content-Disposition", "attachment; filename="+title+".md")
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(len(buf.String())))
+		file := strings.NewReader(buf.String())
+
+		_, err = io.Copy(w, file)
+		if err != nil {
+			http.Error(w, "Error copying file content", http.StatusInternalServerError)
 			return
 		}
-		fmt.Println(page.Object.String())
 	}
 }
